@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Pump Doctor Dashboard</title>
+<script src="https://unpkg.com/mqtt@5/dist/mqtt.min.js"></script>
+<style>
+:root{
+  --bg:#0A1022; --card:#151E3A; --border:#2B3A66; --text:#F7F7FF; --dim:#8D99AE;
+  --inner:#1E2A4F; --cyan:#4CC9F0; --purple:#9D4EDD; --yellow:#FFD60A;
+  --ok:#06D6A0; --warn:#FF9F1C; --bad:#EF476F;
+}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(1200px 600px at 20% -10%,#1a2350 0%,var(--bg) 60%);color:var(--text);
+  font-family:system-ui,-apple-system,"Segoe UI","Noto Sans Thai",Tahoma,sans-serif;min-height:100vh}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--border)}
+h1{font-size:22px;margin:0;font-weight:700}
+h1 small{color:var(--yellow);font-size:15px;margin-left:8px;font-weight:600}
+.conn{display:flex;gap:14px;align-items:center;font-size:14px;color:var(--dim)}
+.dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--bad);margin-right:6px;box-shadow:0 0 8px currentColor;color:var(--bad)}
+.dot.on{background:var(--ok);color:var(--ok)}
+.dot.warn{background:var(--warn);color:var(--warn)}
+main{display:grid;grid-template-columns:repeat(12,1fr);gap:14px;padding:16px 20px;max-width:1200px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:16px 18px;position:relative}
+.card h2{margin:0 0 10px;font-size:15px;font-weight:700;letter-spacing:.2px}
+.c-vib{grid-column:span 6}.c-temp{grid-column:span 6}
+.c-pump{grid-column:span 3}.c-tank{grid-column:span 3}.c-ctrl{grid-column:span 6}
+.c-log{grid-column:span 12}
+@media(max-width:900px){.c-vib,.c-temp,.c-ctrl,.c-pump,.c-tank{grid-column:span 12}}
+@media(min-width:901px) and (max-width:1100px){.c-pump,.c-tank{grid-column:span 6}.c-ctrl{grid-column:span 12}}
+.big{font-size:44px;font-weight:800;line-height:1;color:var(--yellow)}
+.row{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+.status{font-size:18px;font-weight:700}
+.bar{position:relative;height:24px;background:var(--inner);border-radius:12px;overflow:hidden;margin:14px 0 4px}
+.fill{height:100%;width:0;border-radius:12px;background:var(--ok);transition:width .5s,background .3s}
+.mark{position:absolute;top:0;bottom:0;width:2px;background:var(--text);opacity:.8}
+.scale{position:relative;height:16px;font-size:11px;color:var(--dim)}
+.scale span{position:absolute;transform:translateX(-50%)}
+.meta{display:flex;gap:18px;flex-wrap:wrap;font-size:13px;margin-top:8px;color:var(--text)}
+.meta b{color:var(--yellow)}
+.hist{display:flex;gap:8px;align-items:flex-end;height:120px;background:var(--inner);border-radius:14px;padding:12px;margin-top:12px}
+.hist div{flex:1;border-radius:6px;background:var(--ok);min-height:4px;transition:height .4s,background .3s}
+.switch{display:inline-flex;align-items:center;justify-content:center;min-width:110px;height:42px;border-radius:21px;
+  background:var(--inner);color:var(--dim);font-weight:800;font-size:18px;border:1px solid var(--border);transition:.3s}
+.switch.on{background:var(--ok);color:#06231c;box-shadow:0 0 16px rgba(6,214,160,.5)}
+.sub{color:var(--dim);font-size:12px;margin-top:10px}
+.val{font-size:20px;color:var(--yellow);font-weight:700}
+.btns{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px}
+button{background:var(--purple);color:#fff;border:0;border-radius:12px;padding:10px 16px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit}
+button:hover{filter:brightness(1.12)}
+button.ok{background:var(--ok);color:#06231c}
+button.bad{background:var(--bad)}
+button.ghost{background:var(--inner);color:var(--text);border:1px solid var(--border)}
+input{background:var(--inner);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:9px 11px;font-size:14px;font-family:inherit;outline:none}
+input:focus{border-color:var(--purple)}
+input[type=number]{width:76px}
+label{font-size:13px;color:var(--dim)}
+#log{max-height:240px;overflow:auto;font-family:ui-monospace,Consolas,monospace;font-size:13px;line-height:1.7}
+#log div{border-bottom:1px solid rgba(255,255,255,.05);padding:2px 0}
+#log .t{color:var(--dim);margin-right:8px}
+.banner{display:none;grid-column:span 12;background:rgba(239,71,111,.15);border:1px solid var(--bad);color:#ffc2d0;border-radius:14px;padding:12px 16px;font-weight:600}
+.banner.show{display:block}
+.banner.w{background:rgba(255,159,28,.13);border-color:var(--warn);color:#ffd9a3}
+</style>
+</head>
+<body>
+<header>
+  <h1>Smart Pump Doctor <small id="teamTag">[team03]</small></h1>
+  <div class="conn">
+    <span><span class="dot" id="mqDot"></span><span id="mqTxt">MQTT: Offline</span></span>
+    <span><span class="dot" id="bdDot"></span><span id="bdTxt">Board: ไม่มีข้อมูล</span></span>
+    <label>ทีม <input id="teamInput" value="team03" size="8"></label>
+    <button class="ghost" id="applyTeam">เชื่อมต่อ</button>
+    <button class="ghost" id="demoBtn">Demo</button>
+  </div>
+</header>
+
+<main>
+  <div class="banner" id="banner"></div>
+
+  <section class="card c-vib">
+    <h2 style="color:var(--purple)">Vibration Monitor (m/s²)</h2>
+    <div class="row"><span class="big" id="vpct">--</span><span class="status" id="vstat">รอข้อมูลจากบอร์ด...</span></div>
+    <div class="bar"><div class="fill" id="vfill"></div><div class="mark" style="left:60%"></div></div>
+    <div class="scale"><span style="left:60%;color:var(--warn)">60</span><span style="left:98%;color:var(--bad)">100</span></div>
+    <div class="meta">
+      <span>Vib <b id="vnow">--</b></span>
+      <span>Max <b id="vmax">--</b></span>
+      <span>Limit (ประมาณ) <b id="vlim">--</b></span>
+    </div>
+    <div class="hist" id="hist"></div>
+    <div class="sub">เส้นเสีย = ค่าพื้นฐาน × 4 (ค่าพื้นฐานเว็บประมาณจากค่าแรก ๆ ของบอร์ด) · สถานะ "ผิดปกติ" ใช้ค่า vib_bad จากบอร์ดโดยตรง
+      <button class="ghost" id="resetBase" style="padding:4px 10px;font-size:12px;margin-left:6px">เรียนรู้ใหม่</button></div>
+  </section>
+
+  <section class="card c-temp">
+    <h2 style="color:var(--warn)">Motor Temp</h2>
+    <div class="row"><span class="big" id="tnum">--</span><span class="status" id="tstat">--</span></div>
+    <div class="bar"><div class="fill" id="tfill"></div>
+      <div class="mark" style="left:60%"></div><div class="mark" style="left:80%"></div></div>
+    <div class="scale"><span style="left:0">25</span><span style="left:60%;color:var(--warn)">70</span><span style="left:80%;color:var(--bad)">85</span><span style="left:98%">100</span></div>
+    <div class="sub">เฝ้าระวัง ≥ 70 °C · Overheat ≥ 85 °C (ปั๊มถูกตัดและไม่รับคำสั่งเปิด)</div>
+  </section>
+
+  <section class="card c-pump">
+    <h2 style="color:var(--ok)">Switch Pump</h2>
+    <div class="switch" id="pump">OFF</div>
+    <div class="sub">Run Time สะสม</div>
+    <div class="val" id="run">00:00:00</div>
+  </section>
+
+  <section class="card c-tank">
+    <h2 style="color:var(--cyan)">Water Tank (VR4)</h2>
+    <div class="row"><span class="big" style="font-size:36px" id="tank">--</span><span class="status" id="tankSt">--</span></div>
+    <div class="bar"><div class="fill" id="tankFill" style="background:var(--cyan)"></div><div class="mark" style="left:10%"></div></div>
+    <div class="sub">ต่ำกว่า 10% ไม่เปิดปั๊ม<br>ดิน (VR1) <b id="soil" style="color:var(--yellow)">--</b></div>
+  </section>
+
+  <section class="card c-ctrl">
+    <h2 style="color:var(--purple)">ควบคุมปั๊ม (ส่งคำสั่งผ่าน MQTT)</h2>
+    <div class="btns">
+      <label>วินาที <input type="number" id="sec" value="10" min="1" max="30"></label>
+      <button class="ok" id="bOn">เปิดปั๊ม</button>
+      <button class="bad" id="bOff">ปิดปั๊ม</button>
+      <button id="bBeep">Beep เรียกที่บอร์ด</button>
+    </div>
+    <div class="btns">
+      <input id="sayTxt" placeholder="ข้อความขึ้นจอ Matrix (A-Z)" maxlength="20" style="flex:1;min-width:180px">
+      <button id="bSay">ส่งข้อความ</button>
+    </div>
+    <div class="sub">บอร์ดจะปฏิเสธถ้าสั่นผิดปกติ, Overheat หรือถังต่ำกว่า 10% · เปิดได้สูงสุด 30 วินาทีต่อครั้ง</div>
+  </section>
+
+  <section class="card c-log">
+    <h2>Event Log</h2>
+    <div id="log"></div>
+  </section>
+</main>
+
+<script>
+(function(){
+  var BROKER = "wss://broker.hivemq.com:8884/mqtt";
+  var K_WARN=3, K_BAD=4, WARN_PCT=60, TEMP_WARN=70, TEMP_MAX=85, TEMP_LO=25, TEMP_HI=100, TANK_MIN=10, HIST_N=8;
+  var COL={ok:"#06D6A0",warn:"#FF9F1C",bad:"#EF476F",cyan:"#4CC9F0",yellow:"#FFD60A"};
+  var $=function(id){return document.getElementById(id)};
+
+  var team = localStorage.getItem("pd_team") || "team03";
+  var client=null, topics={}, lastTel=0, demoTimer=null, demoOn=false;
+  var base=null, baseBuf=[], hist=[], lastHistT=0;
+
+  function setTopics(){
+    topics={cmd:"bento-aiot/"+team+"/cmd",tel:"bento-aiot/"+team+"/telemetry",ev:"bento-aiot/"+team+"/event"};
+    $("teamTag").textContent="["+team+"]"; $("teamInput").value=team;
+  }
+  function log(msg,color){
+    var d=document.createElement("div"), t=new Date().toLocaleTimeString("th-TH");
+    d.innerHTML='<span class="t">'+t+'</span>'; var s=document.createElement("span");
+    s.textContent=msg; if(color)s.style.color=color; d.appendChild(s);
+    var l=$("log"); l.insertBefore(d,l.firstChild); while(l.children.length>80)l.removeChild(l.lastChild);
+  }
+  function setMq(state,txt){
+    $("mqDot").className="dot"+(state==="on"?" on":state==="warn"?" warn":"");
+    $("mqTxt").textContent="MQTT: "+txt;
+  }
+  function hms(s){s=Math.max(0,s|0);return [s/3600|0,(s/60|0)%60,s%60].map(function(n){return String(n).padStart(2,"0")}).join(":")}
+  function colorFor(pct,bad,tempBad,warn){
+    if(bad||tempBad) return COL.bad; if(warn||pct>=WARN_PCT) return COL.warn; return COL.ok;
+  }
+
+  // ---------- เชื่อมต่อ MQTT ----------
+  function connect(){
+    if(client){try{client.end(true)}catch(e){}}
+    setTopics(); setMq("warn","กำลังเชื่อมต่อ...");
+    client=mqtt.connect(BROKER,{clientId:"pd-web-"+Math.random().toString(16).slice(2,8),keepalive:60,reconnectPeriod:3000,clean:true});
+    client.on("connect",function(){
+      setMq("on","Online");
+      client.subscribe([topics.tel,topics.ev],function(err){
+        if(err) log("subscribe ไม่สำเร็จ",COL.bad); else log("ฟัง "+topics.tel+" และ "+topics.ev,COL.ok);
+      });
+    });
+    client.on("reconnect",function(){setMq("warn","กำลังต่อใหม่...")});
+    client.on("close",function(){setMq("","Offline")});
+    client.on("error",function(e){log("MQTT error: "+(e&&e.message||e),COL.bad)});
+    client.on("message",function(topic,payload){
+      var obj; try{obj=JSON.parse(payload.toString())}catch(e){return}
+      if(topic===topics.tel) onTelemetry(obj); else if(topic===topics.ev) onEvent(obj);
+    });
+  }
+  function publish(obj){
+    if(demoOn){log("(Demo) คำสั่ง: "+JSON.stringify(obj),COL.yellow);demoCmd(obj);return}
+    if(!client||!client.connected){log("ยังไม่ได้เชื่อมต่อ MQTT",COL.warn);return}
+    client.publish(topics.cmd,JSON.stringify(obj));
+    log("ส่งคำสั่ง: "+JSON.stringify(obj),COL.cyan);
+  }
+
+  // ---------- แสดงผล ----------
+  function onTelemetry(d){
+    lastTel=Date.now();
+    $("bdDot").className="dot on"; $("bdTxt").textContent="Board: ออนไลน์ (#"+(d.n!=null?d.n:"-")+")";
+    var bad=!!d.vib_bad, v=(d.vib==null?null:Number(d.vib)), vmax=(d.vib_max==null?null:Number(d.vib_max));
+    var temp=Number(d.temp_c), tank=Number(d.tank);
+
+    // ค่าพื้นฐานประมาณจาก 3 ค่าแรกที่ไม่ null
+    if(base===null && v!=null){ baseBuf.push(v); if(baseBuf.length>=3){base=Math.max(0.05,baseBuf.reduce(function(a,b){return a+b},0)/baseBuf.length)} }
+    var lim=base?base*K_BAD:null, pct=(v!=null&&lim)?Math.min(100,Math.round(v*100/lim)):0;
+    var warn=!!(base&&v!=null&&v>=base*K_WARN&&v<lim);
+    var tempBad=temp>=TEMP_MAX;
+    var col=colorFor(pct,bad&&!tempBad,tempBad,warn||temp>=TEMP_WARN);
+
+    // Vibration
+    if(v==null){ $("vpct").textContent="--"; $("vstat").textContent="บอร์ดกำลังเรียนรู้ค่าปกติ 5 วินาที"; $("vstat").style.color=COL.yellow; $("vfill").style.width="0"; }
+    else{
+      $("vpct").textContent=pct+"%"; $("vpct").style.color=col;
+      $("vfill").style.width=pct+"%"; $("vfill").style.background=col;
+      var st = (bad||tempBad)?"ผิดปกติ Stop":(warn||pct>=WARN_PCT||temp>=TEMP_WARN)?"เฝ้าระวัง":"ชีพจรปกติ";
+      $("vstat").textContent=st; $("vstat").style.color=col;
+    }
+    $("vnow").textContent=v==null?"--":v.toFixed(2);
+    $("vmax").textContent=vmax==null?"--":vmax.toFixed(2);
+    $("vlim").textContent=lim?lim.toFixed(2):"--";
+
+    // ประวัติ 8 แท่ง
+    if(v!=null && lim){ hist.push(pct); if(hist.length>HIST_N)hist.shift(); drawHist(); }
+
+    // Temp
+    var tcol=temp>=TEMP_MAX?COL.bad:temp>=TEMP_WARN?COL.warn:COL.ok;
+    $("tnum").textContent=temp.toFixed(1)+" °C"; $("tnum").style.color=tcol;
+    $("tfill").style.width=Math.max(0,Math.min(100,(temp-TEMP_LO)*100/(TEMP_HI-TEMP_LO)))+"%"; $("tfill").style.background=tcol;
+    $("tstat").textContent=temp>=TEMP_MAX?"ผิดปกติ (Overheat)":temp>=TEMP_WARN?"เฝ้าระวัง":"ปกติ"; $("tstat").style.color=tcol;
+
+    // Pump
+    var on=!!d.pump; $("pump").className="switch"+(on?" on":""); $("pump").textContent=on?"ON":"OFF";
+    $("run").textContent=hms(d.run_s||0);
+
+    // Tank
+    var ok=tank>=TANK_MIN; $("tank").textContent=tank+" %"; $("tank").style.color=ok?COL.yellow:COL.bad;
+    $("tankFill").style.width=tank+"%"; $("tankFill").style.background=ok?COL.cyan:COL.bad;
+    $("tankSt").textContent=ok?"ระดับปกติ":"น้ำต่ำ!"; $("tankSt").style.color=ok?COL.ok:COL.bad;
+    $("soil").textContent=d.soil!=null?d.soil+" %":"--";
+
+    // Banner
+    var b=$("banner");
+    if(tempBad){b.className="banner show";b.textContent="⚠ มอเตอร์ร้อนเกิน "+TEMP_MAX+" °C — บอร์ดตัดปั๊มและปฏิเสธคำสั่งเปิด"}
+    else if(bad){b.className="banner show";b.textContent="⚠ ปั๊มสั่นผิดปกติ — บอร์ดหยุดปั๊มแล้ว ต้องเรียกช่างตรวจสอบ"}
+    else if(!ok){b.className="banner show w";b.textContent="น้ำในถังต่ำกว่า "+TANK_MIN+"% — ปั๊มจะไม่เปิด"}
+    else b.className="banner";
+  }
+  function drawHist(){
+    var h=$("hist"); h.innerHTML="";
+    for(var i=0;i<HIST_N;i++){
+      var idx=i-(HIST_N-hist.length), v=idx>=0?hist[idx]:0, d=document.createElement("div");
+      d.style.height=Math.max(4,v*0.96)+"%"; d.style.background=v>=100?COL.bad:v>=WARN_PCT?COL.warn:COL.ok; h.appendChild(d);
+    }
+  }
+  function onEvent(e){
+    if(e.event==="vib") log(e.bad?"[EVENT] สั่นผิดปกติ vib="+e.vib+" — ปั๊มหยุด":"[EVENT] ชีพจรกลับมาปกติ vib="+e.vib, e.bad?COL.bad:COL.ok);
+    else if(e.event==="temp") log(e.bad?"[EVENT] Overheat "+e.temp_c+" °C — ปั๊มหยุด":"[EVENT] อุณหภูมิกลับมาปกติ "+e.temp_c+" °C", e.bad?COL.bad:COL.ok);
+    else log("[EVENT] "+JSON.stringify(e),COL.cyan);
+  }
+
+  // เช็กว่าบอร์ดเงียบไปหรือยัง
+  setInterval(function(){
+    if(lastTel && Date.now()-lastTel>15000){ $("bdDot").className="dot"; $("bdTxt").textContent="Board: ไม่มีสัญญาณ >15 วิ"; }
+  },3000);
+
+  // ---------- ปุ่มควบคุม ----------
+  $("bOn").onclick=function(){var s=Math.max(1,Math.min(30,parseInt($("sec").value)||10));publish({cmd:"pump",on:1,sec:s})};
+  $("bOff").onclick=function(){publish({cmd:"pump",on:0})};
+  $("bBeep").onclick=function(){publish({cmd:"beep"})};
+  $("bSay").onclick=function(){var t=$("sayTxt").value.trim();if(!t)return;publish({cmd:"say",text:t})};
+  $("applyTeam").onclick=function(){
+    var t=$("teamInput").value.trim();
+    if(!/^team\d{2}$/.test(t)){log("ชื่อทีมต้องเป็นรูปแบบ teamXX เช่น team03",COL.warn);return}
+    team=t; localStorage.setItem("pd_team",team); stopDemo(); connect();
+  };
+  $("resetBase").onclick=function(){base=null;baseBuf=[];hist=[];drawHist();log("เรียนรู้ค่าพื้นฐานของเว็บใหม่",COL.warn)};
+
+  // ---------- โหมด Demo (ทดสอบหน้าเว็บโดยไม่ต้องมีบอร์ด) ----------
+  var sim={n:0,run:0,pump:0,left:0,tank:62,temp:48,vib:0.12,max:0.12,bad:0,t:0};
+  function demoCmd(c){
+    if(c.cmd==="pump"){ if(!c.on){sim.pump=0;sim.left=0} else if(sim.bad||sim.temp>=TEMP_MAX){log("(Demo) บอร์ดปฏิเสธ: ผิดปกติ",COL.bad)} else if(sim.tank<TANK_MIN){log("(Demo) น้ำต่ำเกินไป",COL.warn)} else {sim.pump=1;sim.left=c.sec||10} }
+  }
+  function stopDemo(){ if(demoTimer){clearInterval(demoTimer);demoTimer=null} demoOn=false; $("demoBtn").textContent="Demo"; }
+  $("demoBtn").onclick=function(){
+    if(demoOn){stopDemo();log("ปิดโหมด Demo",COL.warn);return}
+    demoOn=true; $("demoBtn").textContent="หยุด Demo"; base=null;baseBuf=[];hist=[]; log("เปิดโหมด Demo (ข้อมูลจำลอง)",COL.yellow);
+    demoTimer=setInterval(function(){
+      sim.t++; sim.n++;
+      sim.vib=0.12+Math.random()*0.04+(sim.t%20>14?0.45:0); sim.max=Math.max(sim.max,sim.vib);
+      sim.temp=55+22*Math.sin(sim.t/6)+8*Math.random(); sim.tank=Math.max(0,Math.min(100,sim.tank+(Math.random()*4-2)));
+      if(sim.pump){sim.run++;sim.left--;if(sim.left<=0)sim.pump=0}
+      onTelemetry({n:sim.n,temp_c:+sim.temp.toFixed(1),soil:Math.round(sim.temp-25),tank:Math.round(sim.tank),pump:sim.pump,
+        vib:+sim.vib.toFixed(2),vib_bad:sim.vib>0.5?1:0,run_s:sim.run,vib_max:+sim.max.toFixed(2)});
+    },1000);
+  };
+
+  drawHist(); setTopics(); connect();
+})();
+</script>
+</body>
+</html>
