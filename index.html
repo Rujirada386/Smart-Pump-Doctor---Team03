@@ -4,7 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Smart Pump Doctor Dashboard</title>
-<script src="https://unpkg.com/mqtt@5/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script>window.mqtt||document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.2.1/mqtt.min.js"><\/script>')</script>
+<script>window.mqtt||document.write('<script src="https://unpkg.com/mqtt@5/dist/mqtt.min.js"><\/script>')</script>
 <style>
 :root{
   --bg:#0A1022; --card:#151E3A; --border:#2B3A66; --text:#F7F7FF; --dim:#8D99AE;
@@ -59,6 +61,14 @@ label{font-size:13px;color:var(--dim)}
 #log{max-height:240px;overflow:auto;font-family:ui-monospace,Consolas,monospace;font-size:13px;line-height:1.7}
 #log div{border-bottom:1px solid rgba(255,255,255,.05);padding:2px 0}
 #log .t{color:var(--dim);margin-right:8px}
+.c-rec{grid-column:span 12}
+.tblwrap{max-height:320px;overflow:auto;border:1px solid var(--border);border-radius:14px;background:#111a33}
+table.rec{width:100%;border-collapse:collapse;font-size:14px}
+table.rec th{position:sticky;top:0;background:#0f1730;color:#8fb4e8;text-align:left;font-weight:700;padding:11px 14px;white-space:nowrap}
+table.rec td{padding:11px 14px;border-top:1px solid rgba(255,255,255,.07);white-space:nowrap}
+table.rec td.note{white-space:normal;font-weight:700}
+.st-ok{color:var(--ok);font-weight:700}.st-early{color:var(--yellow);font-weight:700}.st-bad{color:#ff7b8f;font-weight:700}.st-learn{color:var(--dim);font-weight:700}
+.rec-empty{color:var(--dim);text-align:center;padding:22px 0}
 .banner{display:none;grid-column:span 12;background:rgba(239,71,111,.15);border:1px solid var(--bad);color:#ffc2d0;border-radius:14px;padding:12px 16px;font-weight:600}
 .banner.show{display:block}
 .banner.w{background:rgba(255,159,28,.13);border-color:var(--warn);color:#ffd9a3}
@@ -136,6 +146,21 @@ label{font-size:13px;color:var(--dim)}
     <h2>Event Log</h2>
     <div id="log"></div>
   </section>
+
+  <section class="card c-rec">
+    <h2 style="color:var(--cyan)">ใบบันทึก</h2>
+    <div class="tblwrap">
+      <table class="rec">
+        <thead><tr><th>เวลา</th><th>Vib (g)</th><th>°C</th><th>Tank %</th><th>ปั๊ม</th><th>สถานะ</th><th>หมายเหตุ</th></tr></thead>
+        <tbody id="recBody"><tr><td colspan="7" class="rec-empty">รอข้อมูลจากบอร์ด...</td></tr></tbody>
+      </table>
+    </div>
+    <div class="btns" style="margin:12px 0 0">
+      <button class="ghost" id="dlCsv">ดาวน์โหลด CSV</button>
+      <button class="ghost" id="clrRec" style="font-weight:600;color:var(--dim)">ล้างตาราง</button>
+      <span class="sub" style="margin:0">บันทึกเมื่อสถานะเปลี่ยน และทุก ~10 วินาที</span>
+    </div>
+  </section>
 </main>
 
 <script>
@@ -170,6 +195,11 @@ label{font-size:13px;color:var(--dim)}
 
   // ---------- เชื่อมต่อ MQTT ----------
   function connect(){
+    if(typeof mqtt==="undefined"){
+      setMq("","โหลดไลบรารี MQTT ไม่ได้ (เช็กเน็ต หรือเปิดไฟล์นี้ใน Chrome โดยตรง)");
+      log("โหลด mqtt.js ไม่สำเร็จ — ใช้โหมด Demo ได้ แต่เชื่อมบอร์ดไม่ได้",COL.bad);
+      return;
+    }
     if(client){try{client.end(true)}catch(e){}}
     setTopics(); setMq("warn","กำลังเชื่อมต่อ...");
     client=mqtt.connect(BROKER,{clientId:"pd-web-"+Math.random().toString(16).slice(2,8),keepalive:60,reconnectPeriod:3000,clean:true});
@@ -245,6 +275,17 @@ label{font-size:13px;color:var(--dim)}
     else if(bad){b.className="banner show";b.textContent="⚠ ปั๊มสั่นผิดปกติ — บอร์ดหยุดปั๊มแล้ว ต้องเรียกช่างตรวจสอบ"}
     else if(!ok){b.className="banner show w";b.textContent="น้ำในถังต่ำกว่า "+TANK_MIN+"% — ปั๊มจะไม่เปิด"}
     else b.className="banner";
+
+    // ใบบันทึก
+    var status, cls, notes=[];
+    if(v==null){status="กำลังเรียนรู้";cls="st-learn";notes.push("บอร์ดกำลังเรียนรู้ค่าปกติ")}
+    else if(bad||tempBad){status="แจ้งเตือน";cls="st-bad"}
+    else if(warn||pct>=WARN_PCT||temp>=TEMP_WARN||!ok){status="เตือนล่วงหน้า";cls="st-early"}
+    else {status="ในช่วง";cls="st-ok"}
+    if(tempBad) notes.push("Overheat "+temp.toFixed(1)+" °C"); else if(temp>=TEMP_WARN) notes.push("อุณหภูมิสูง");
+    if(bad) notes.push("สั่นผิดปกติ "+(v!=null?v.toFixed(2):"")+" g"); else if(v!=null&&(warn||pct>=WARN_PCT)) notes.push("สั่นเริ่มสูง "+v.toFixed(2)+" g");
+    if(!ok) notes.push("น้ำต่ำ");
+    addRec({v:v,t:temp,tank:tank,pump:on,status:status,cls:cls,note:notes.join(" · ")});
   }
   function drawHist(){
     var h=$("hist"); h.innerHTML="";
@@ -296,6 +337,49 @@ label{font-size:13px;color:var(--dim)}
   };
 
   drawHist(); setTopics(); connect();
+
+  // ---------- ใบบันทึก (ตาราง + CSV) ----------
+  var recRows=[], REC_MAX=5000, REC_SHOW=200, lastRecKey="", lastRecT=0, REC_EVERY=10000;
+  function pad2(n){return String(n).padStart(2,"0")}
+  function hmsOf(d){return pad2(d.getHours())+":"+pad2(d.getMinutes())+":"+pad2(d.getSeconds())}
+  function addRec(r){
+    var key=r.status+"|"+r.note, now=Date.now();
+    if(key===lastRecKey && now-lastRecT<REC_EVERY) return;
+    lastRecKey=key; lastRecT=now; r.d=new Date(now);
+    recRows.push(r); if(recRows.length>REC_MAX)recRows.shift();
+    var body=$("recBody");
+    if(body.firstChild && body.firstChild.firstChild && body.firstChild.firstChild.className==="rec-empty") body.innerHTML="";
+    var tr=document.createElement("tr");
+    [hmsOf(r.d), r.v==null?"--":r.v.toFixed(2), r.t.toFixed(1), r.tank, r.pump?"ON":"OFF", r.status, r.note].forEach(function(txt,i){
+      var td=document.createElement("td"); td.textContent=txt;
+      if(i===5)td.className=r.cls; if(i===6)td.className="note";
+      tr.appendChild(td);
+    });
+    body.insertBefore(tr,body.firstChild);
+    while(body.children.length>REC_SHOW)body.removeChild(body.lastChild);
+  }
+  function csvCell(v){
+    v=String(v==null?"":v);
+    if(/^[=+\-@]/.test(v)) v="'"+v;
+    return '"'+v.replace(/"/g,'""')+'"';
+  }
+  $("dlCsv").onclick=function(){
+    if(!recRows.length){alert("ยังไม่มีข้อมูลในใบบันทึก");return}
+    var lines=[["วันที่","เวลา","Vib (g)","Temp (C)","Tank (%)","ปั๊ม","สถานะ","หมายเหตุ"].map(csvCell).join(",")];
+    recRows.forEach(function(r){
+      var d=r.d, date=d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate());
+      lines.push([date,hmsOf(r.d),r.v==null?"":r.v.toFixed(2),r.t.toFixed(1),r.tank,r.pump?"ON":"OFF",r.status,r.note].map(csvCell).join(","));
+    });
+    var blob=new Blob(["\uFEFF"+lines.join("\r\n")],{type:"text/csv;charset=utf-8"});
+    var n=new Date(), name="pump_record_"+team+"_"+n.getFullYear()+pad2(n.getMonth()+1)+pad2(n.getDate())+"_"+pad2(n.getHours())+pad2(n.getMinutes())+".csv";
+    var a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){URL.revokeObjectURL(a.href)},1000);
+  };
+  $("clrRec").onclick=function(){
+    recRows=[]; lastRecKey=""; lastRecT=0;
+    $("recBody").innerHTML='<tr><td colspan="7" class="rec-empty">รอข้อมูลจากบอร์ด...</td></tr>';
+  };
 })();
 </script>
 </body>
